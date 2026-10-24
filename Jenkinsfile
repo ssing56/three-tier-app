@@ -46,10 +46,10 @@ pipeline {
                 sh '''
                     set -eu
 
-                    docker compose up -d mongodb backend
+                    echo "Testing backend health endpoint..."
 
                     success=0
-                    for i in $(seq 1 30); do
+                    for i in $(seq 1 15); do
                         if curl -fsS http://localhost:5000/api/health; then
                             success=1
                             break
@@ -58,11 +58,11 @@ pipeline {
                     done
 
                     if [ "$success" -ne 1 ]; then
-                        echo "Backend health test failed"
+                        echo "ERROR: Backend health test failed"
                         exit 1
                     fi
 
-                    echo "Backend health test passed"
+                    echo "Backend health test PASSED"
                 '''
             }
         }
@@ -70,28 +70,30 @@ pipeline {
         stage('Trivy Backend Scan') {
             steps {
                 sh '''
+                    set -eu
+
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       -v "$WORKSPACE/trivy-reports:/reports" \
                       aquasec/trivy:latest image \
                       --scanners vuln \
                       --severity HIGH,CRITICAL \
-                      --ignore-unfixed \
                       --exit-code 0 \
                       --format json \
                       --output /reports/backend-trivy.json \
-                      three-tier-app-backend:latest
+                      three-tier-app-ci-cd-backend:latest
 
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       aquasec/trivy:latest image \
                       --scanners vuln \
                       --severity HIGH,CRITICAL \
-                      --ignore-unfixed \
                       --exit-code 0 \
                       --format table \
-                      three-tier-app-backend:latest \
+                      three-tier-app-ci-cd-backend:latest \
                       > trivy-reports/backend-trivy.txt
+
+                    echo "Backend Trivy scan completed"
                 '''
             }
         }
@@ -99,28 +101,30 @@ pipeline {
         stage('Trivy Frontend Scan') {
             steps {
                 sh '''
+                    set -eu
+
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       -v "$WORKSPACE/trivy-reports:/reports" \
                       aquasec/trivy:latest image \
                       --scanners vuln \
                       --severity HIGH,CRITICAL \
-                      --ignore-unfixed \
                       --exit-code 0 \
                       --format json \
                       --output /reports/frontend-trivy.json \
-                      three-tier-app-frontend:latest
+                      three-tier-app-ci-cd-frontend:latest
 
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       aquasec/trivy:latest image \
                       --scanners vuln \
                       --severity HIGH,CRITICAL \
-                      --ignore-unfixed \
                       --exit-code 0 \
                       --format table \
-                      three-tier-app-frontend:latest \
+                      three-tier-app-ci-cd-frontend:latest \
                       > trivy-reports/frontend-trivy.txt
+
+                    echo "Frontend Trivy scan completed"
                 '''
             }
         }
@@ -128,11 +132,13 @@ pipeline {
 
     post {
         always {
-            archiveArtifacts artifacts: 'trivy-reports/*',
-                             allowEmptyArchive: true,
-                             fingerprint: true
+            archiveArtifacts(
+                artifacts: 'trivy-reports/*',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
 
-            echo 'Pipeline finished. Check archived Trivy reports for findings.'
+            echo 'Pipeline finished. Check archived Trivy reports.'
         }
 
         success {
@@ -144,4 +150,3 @@ pipeline {
         }
     }
 }
-
