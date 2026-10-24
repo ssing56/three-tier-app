@@ -34,19 +34,114 @@ pipeline {
                 sh 'docker compose build frontend'
             }
         }
+
+        stage('Prepare Trivy Reports') {
+            steps {
+                sh 'mkdir -p trivy-reports'
+            }
+        }
+
+        stage('Backend API Health Test') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker compose up -d mongodb backend
+
+                    success=0
+                    for i in $(seq 1 30); do
+                        if curl -fsS http://localhost:5000/api/health; then
+                            success=1
+                            break
+                        fi
+                        sleep 2
+                    done
+
+                    if [ "$success" -ne 1 ]; then
+                        echo "Backend health test failed"
+                        exit 1
+                    fi
+
+                    echo "Backend health test passed"
+                '''
+            }
+        }
+
+        stage('Trivy Backend Scan') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v "$WORKSPACE/trivy-reports:/reports" \
+                      aquasec/trivy:latest image \
+                      --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 0 \
+                      --format json \
+                      --output /reports/backend-trivy.json \
+                      three-tier-app-backend:latest
+
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:latest image \
+                      --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 0 \
+                      --format table \
+                      three-tier-app-backend:latest \
+                      > trivy-reports/backend-trivy.txt
+                '''
+            }
+        }
+
+        stage('Trivy Frontend Scan') {
+            steps {
+                sh '''
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v "$WORKSPACE/trivy-reports:/reports" \
+                      aquasec/trivy:latest image \
+                      --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 0 \
+                      --format json \
+                      --output /reports/frontend-trivy.json \
+                      three-tier-app-frontend:latest
+
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:latest image \
+                      --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 0 \
+                      --format table \
+                      three-tier-app-frontend:latest \
+                      > trivy-reports/frontend-trivy.txt
+                '''
+            }
+        }
     }
 
     post {
+        always {
+            archiveArtifacts artifacts: 'trivy-reports/*',
+                             allowEmptyArchive: true,
+                             fingerprint: true
+
+            echo 'Pipeline finished. Check archived Trivy reports for findings.'
+        }
+
         success {
-            echo 'SUCCESS: Three-tier application images built successfully.'
+            echo 'SUCCESS: Build, API health test and Trivy scans completed.'
         }
 
         failure {
-            echo 'FAILED: Check the Jenkins Console Output for details.'
-        }
-
-        always {
-            echo 'Pipeline execution finished.'
+            echo 'FAILED: Check Console Output for the failing stage.'
         }
     }
 }
+
